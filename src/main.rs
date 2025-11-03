@@ -3,6 +3,12 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     FromSample, SizedSample, I24,
 };
+use std::{
+    f32,
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 fn main() -> anyhow::Result<()> {
     let stream = stream_setup()?;
@@ -99,22 +105,23 @@ impl Synth {
             }
         }
 
-        if active_count > 0 {
-            output / active_count as f32
+        let out = if active_count > 0 {
+            (output / active_count as f32).clamp(-0.9, 0.9)
         } else {
             0.0
-        }
+        };
+        out
     }
 
     fn major_triad(&mut self, root: Notes) {
         self.press_it_pops(root);
-        self.press_it_pops(root + 3);
+        self.press_it_pops(root + 4);
         self.press_it_pops(root + 7);
     }
 
     fn minor_triad(&mut self, root: Notes) {
         self.press_it_pops(root);
-        self.press_it_pops(root + 4);
+        self.press_it_pops(root + 3);
         self.press_it_pops(root + 7);
     }
 }
@@ -125,6 +132,10 @@ pub enum Waveform {
     Square,
     Saw,
     Triangle,
+}
+
+pub struct Envelope {
+    attack_seconds: usize,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -160,7 +171,6 @@ pub enum Notes {
 }
 
 impl Notes {
-    // Helper function to convert note to a semitone index (0-11)
     fn to_semitone(&self) -> u32 {
         match self {
             Notes::C(_) => 0,
@@ -178,7 +188,6 @@ impl Notes {
         }
     }
 
-    // Helper function to get the octave
     fn octave(&self) -> u32 {
         match self {
             Notes::C(o)
@@ -196,7 +205,6 @@ impl Notes {
         }
     }
 
-    // Helper function to create a note from semitone and octave
     fn from_semitone_and_octave(semitone: u32, octave: u32) -> Self {
         match semitone % 12 {
             0 => Notes::C(octave),
@@ -251,7 +259,12 @@ pub fn note_to_num(note: Notes) -> f32 {
 
 impl Oscillator {
     fn advance_sample(&mut self) {
-        self.current_sample_index = (self.current_sample_index + 1.0) % self.sample_rate;
+        let s = self.current_sample_index;
+        self.current_sample_index = if s > 340282350000000000000000000000000000. {
+            0.
+        } else {
+            s + 1.
+        }
     }
 
     fn set_waveform(&mut self, waveform: Waveform) {
@@ -344,38 +357,40 @@ pub fn host_device_setup(
     Ok((host, device, config))
 }
 
-pub fn make_stream<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-) -> Result<cpal::Stream, anyhow::Error>
+pub fn make_stream<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<f32>,
 {
+    let synth = Arc::new(Mutex::new(Synth::new(config.sample_rate.0 as f32, 8))); // 8-voice polyphony
     let num_channels = config.channels as usize;
-    let sample_rate = config.sample_rate.0 as f32;
-
-    let mut synth = Synth::new(sample_rate, 8); // 8-voice polyphony
-    let mut chord_triggered = false;
-
     let err_fn = |err| eprintln!("Error building output sound stream: {err}");
-    let time_at_start = std::time::Instant::now();
 
+    let synth_clone = Arc::clone(&synth);
+
+    thread::spawn(move || {
+        {
+            let mut s = synth_clone.lock().unwrap();
+
+            for v in s.voices.iter_mut() {
+                v.oscillator.set_waveform(Waveform::Sine);
+            }
+            s.minor_triad(Notes::G(4));
+        }
+
+        thread::sleep(Duration::from_secs(2));
+
+        {
+            let mut s = synth_clone.lock().unwrap();
+            s.press_it_pops(Notes::Fsharp(6))
+        }
+    });
+
+    let synth_render = Arc::clone(&synth);
     let stream = device.build_output_stream(
         config,
         move |output: &mut [T], _: &cpal::OutputCallbackInfo| {
-            let time_since_start = std::time::Instant::now()
-                .duration_since(time_at_start)
-                .as_secs_f32();
-
-            if time_since_start > 2. && !chord_triggered {
-                synth.major_triad(Notes::G(4));
-                chord_triggered = true;
-            } else {
-                synth.press_it_pops(Notes::B(2));
-            };
-
             for frame in output.chunks_mut(num_channels) {
-                let value: T = T::from_sample(synth.tick());
+                let value: T = T::from_sample(synth_render.lock().unwrap().tick());
                 for sample in frame.iter_mut() {
                     *sample = value;
                 }
