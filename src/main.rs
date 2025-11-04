@@ -13,7 +13,6 @@ use std::{
 fn main() -> anyhow::Result<()> {
     let stream = stream_setup()?;
     stream.play()?;
-    std::thread::sleep(std::time::Duration::from_millis(4000));
     Ok(())
 }
 
@@ -123,6 +122,15 @@ impl Synth {
         self.press_it_pops(root);
         self.press_it_pops(root + 3);
         self.press_it_pops(root + 7);
+    }
+
+    fn clear(&mut self) {
+        for voice in self.voices.iter_mut() {
+            voice.is_active = false;
+            voice.age = 0;
+            voice.oscillator.current_sample_index = 0.;
+            voice.oscillator.frequency_hz = 0.;
+        }
     }
 }
 
@@ -374,14 +382,24 @@ where
             for v in s.voices.iter_mut() {
                 v.oscillator.set_waveform(Waveform::Sine);
             }
-            s.minor_triad(Notes::G(4));
+            s.minor_triad(Notes::A(4));
         }
 
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(2000));
 
         {
             let mut s = synth_clone.lock().unwrap();
-            s.press_it_pops(Notes::Fsharp(6))
+            s.clear();
+            s.minor_triad(Notes::Fsharp(4));
+            s.press_it_pops(Notes::F(4));
+        }
+        thread::sleep(Duration::from_millis(2000));
+
+        {
+            let mut s = synth_clone.lock().unwrap();
+            s.clear();
+            s.minor_triad(Notes::Gsharp(4));
+            s.press_it_pops(Notes::Fsharp(4));
         }
     });
 
