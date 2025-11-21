@@ -5,6 +5,8 @@ use cpal::{
 };
 use std::{
     f32,
+    fs::{self, File},
+    path::Path,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -13,6 +15,30 @@ use std::{
 fn main() -> anyhow::Result<()> {
     let stream = stream_setup()?;
     stream.play()?;
+    let server = tiny_http::Server::http("0.0.0.0:8888").expect("failed to create server");
+    loop {
+        for request in server.incoming_requests() {
+            let url = request.url();
+
+            let path = if url == "/" {
+                "ui/homepage.html".to_string()
+            } else {
+                format!("ui{}", url)
+            };
+
+            match fs::read(&path) {
+                Ok(_) => {
+                    let response = tiny_http::Response::from_file(File::open(Path::new(&path))?);
+                    request.respond(response)?;
+                }
+                Err(_) => {
+                    let response = tiny_http::Response::from_string("Error that don't exist");
+                    request.respond(response)?;
+                }
+            }
+        }
+    }
+    #[allow(unreachable_code)]
     Ok(())
 }
 
