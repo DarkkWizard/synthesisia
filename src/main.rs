@@ -16,7 +16,8 @@ fn main() -> anyhow::Result<()> {
     let stream = stream_setup()?;
     stream.play()?;
     let server = tiny_http::Server::http("0.0.0.0:8888").expect("failed to create server");
-    loop {
+    let server_is_running = true;
+    while server_is_running {
         for request in server.incoming_requests() {
             let url = request.url();
 
@@ -32,13 +33,12 @@ fn main() -> anyhow::Result<()> {
                     request.respond(response)?;
                 }
                 Err(_) => {
-                    let response = tiny_http::Response::from_string("Error that don't exist");
+                    let response = tiny_http::Response::from_string("Error 404: that don't exist");
                     request.respond(response)?;
                 }
             }
         }
     }
-    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -59,10 +59,11 @@ const GSHARP: f32 = 25.96;
 pub struct Synth {
     pub voices: Vec<Voice>,
     pub sample_rate: f32,
+    adsr: AdsrEnvelope,
 }
 
 impl Synth {
-    pub fn new(sample_rate: f32, num_voices: usize) -> Self {
+    pub fn new(sample_rate: f32, num_voices: usize, adsr: AdsrEnvelope) -> Self {
         let mut voices = Vec::new();
 
         for _ in 0..num_voices {
@@ -76,12 +77,14 @@ impl Synth {
                 is_active: false,
                 note: Notes::C(4),
                 age: 0,
+                adsr: AdsrEnvelope::new_defaults(),
             })
         }
 
         Self {
             voices,
             sample_rate,
+            adsr,
         }
     }
 
@@ -158,6 +161,30 @@ impl Synth {
             voice.oscillator.frequency_hz = 0.;
         }
     }
+
+    pub fn change_envelope(&mut self) {}
+
+    fn propogate_envelope_change(&mut self) {
+        for mut voice in self.voices.clone() {
+            voice.adsf = self.adsr.clone();
+        }
+    }
+
+    fn change_adsr_attack(&mut self, increment: Duration) {
+        self.adsr.increment_attack(increment);
+    }
+
+    fn change_adsr_decay(&mut self, increment: Duration) {
+        self.adsr.increment_decay(increment);
+    }
+
+    fn change_adsr_sustain(&mut self, increment: f32) {
+        self.adsr.increment_sustain_level(increment);
+    }
+
+    fn change_adsr_release(&mut self, increment: Duration) {
+        self.adsr.increment_release(increment);
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -168,8 +195,48 @@ pub enum Waveform {
     Triangle,
 }
 
-pub struct Envelope {
-    attack_seconds: usize,
+#[derive(Copy, Clone, Debug)]
+pub struct AdsrEnvelope {
+    attack: Duration,
+    decay: Duration,
+    sustain: f32,
+    release: Duration,
+}
+
+impl AdsrEnvelope {
+    pub fn new(attack: Duration, decay: Duration, sustain: f32, release: Duration) -> Self {
+        Self {
+            attack,
+            decay,
+            sustain,
+            release,
+        }
+    }
+
+    pub fn new_defaults() -> Self {
+        Self {
+            attack: Duration::from_millis(100),
+            decay: Duration::from_millis(100),
+            sustain: 1.,
+            release: Duration::from_millis(300),
+        }
+    }
+
+    pub fn increment_attack(&mut self, increment: Duration) {
+        self.attack += increment;
+    }
+
+    pub fn increment_decay(&mut self, increment: Duration) {
+        self.decay += increment;
+    }
+
+    pub fn increment_sustain_level(&mut self, increment: f32) {
+        self.sustain += increment;
+    }
+
+    pub fn increment_release(&mut self, increment: Duration) {
+        self.release += increment;
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -186,6 +253,7 @@ pub struct Voice {
     pub is_active: bool,
     pub note: Notes,
     pub age: usize,
+    pub adsf: AdsrEnvelope,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -395,7 +463,11 @@ pub fn make_stream<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> Res
 where
     T: SizedSample + FromSample<f32>,
 {
-    let synth = Arc::new(Mutex::new(Synth::new(config.sample_rate.0 as f32, 8))); // 8-voice polyphony
+    let synth = Arc::new(Mutex::new(Synth::new(
+        config.sample_rate.0 as f32,
+        8,
+        AdsrEnvelope::new_defaults(),
+    ))); // 8-voice polyphony
     let num_channels = config.channels as usize;
     let err_fn = |err| eprintln!("Error building output sound stream: {err}");
 
