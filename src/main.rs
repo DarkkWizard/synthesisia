@@ -162,26 +162,36 @@ impl Synth {
         }
     }
 
-    pub fn change_envelope(&mut self) {}
+    pub fn change_envelope(&mut self, changes_adsr: (Duration, Duration, f32, Duration)) {
+        self.change_adsr_attack(changes_adsr.0);
+        self.change_adsr_decay(changes_adsr.1);
+        self.change_adsr_sustain(changes_adsr.2);
+        self.change_adsr_release(changes_adsr.3);
+        self.propagate_envelope_change();
+    }
 
-    fn propogate_envelope_change(&mut self) {
+    fn propagate_envelope_change(&mut self) {
         for mut voice in self.voices.clone() {
-            voice.adsf = self.adsr.clone();
+            voice.adsr = self.adsr.clone();
         }
     }
 
+    /// do not use this one! It fucks with things and doesn't propagate!
     fn change_adsr_attack(&mut self, increment: Duration) {
         self.adsr.increment_attack(increment);
     }
 
+    /// do not use this one! It fucks with things and doesn't propagate!
     fn change_adsr_decay(&mut self, increment: Duration) {
         self.adsr.increment_decay(increment);
     }
 
+    /// do not use this one! It fucks with things and doesn't propagate!
     fn change_adsr_sustain(&mut self, increment: f32) {
         self.adsr.increment_sustain_level(increment);
     }
 
+    /// do not use this one! It fucks with things and doesn't propagate!
     fn change_adsr_release(&mut self, increment: Duration) {
         self.adsr.increment_release(increment);
     }
@@ -253,7 +263,7 @@ pub struct Voice {
     pub is_active: bool,
     pub note: Notes,
     pub age: usize,
-    pub adsf: AdsrEnvelope,
+    pub adsr: AdsrEnvelope,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -363,9 +373,9 @@ impl Oscillator {
     fn advance_sample(&mut self) {
         let s = self.current_sample_index;
         self.current_sample_index = if s > 340282350000000000000000000000000000. {
-            0.
-        } else {
             s + 1.
+        } else {
+            0.
         }
     }
 
