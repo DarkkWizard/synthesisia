@@ -11,6 +11,7 @@ use std::{
     thread,
     time::Duration,
 };
+use tiny_http::Method;
 
 fn main() -> anyhow::Result<()> {
     let stream = stream_setup()?;
@@ -20,6 +21,12 @@ fn main() -> anyhow::Result<()> {
     while server_is_running {
         for request in server.incoming_requests() {
             let url = request.url();
+
+            // finish this this brah
+            match (request.method(), request.url()) {
+                (Method::Get, "/") => {}
+                _ => {}
+            }
 
             let path = if url == "/" {
                 "ui/homepage.html".to_string()
