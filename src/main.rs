@@ -5,28 +5,23 @@ use cpal::{
 };
 use std::{
     f32,
-    fs::{self, File},
+    fs::File,
     path::Path,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
-use tiny_http::Method;
+use tiny_http::{Method, Response, Server};
+const TWO_PI: f32 = 2.0 * std::f32::consts::PI;
 
 fn main() -> anyhow::Result<()> {
     let stream = stream_setup()?;
     stream.play()?;
-    let server = tiny_http::Server::http("0.0.0.0:8888").expect("failed to create server");
-    let server_is_running = true;
+    let server = Server::http("0.0.0.0:8888").expect("failed to create server");
+    let mut server_is_running = true;
     while server_is_running {
         for request in server.incoming_requests() {
             let url = request.url();
-
-            // finish this this brah
-            match (request.method(), request.url()) {
-                (Method::Get, "/") => {}
-                _ => {}
-            }
 
             let path = if url == "/" {
                 "ui/homepage.html".to_string()
@@ -34,18 +29,26 @@ fn main() -> anyhow::Result<()> {
                 format!("ui{}", url)
             };
 
-            match fs::read(&path) {
-                Ok(_) => {
-                    let response = tiny_http::Response::from_file(File::open(Path::new(&path))?);
+            match (request.method(), request.url()) {
+                (Method::Post, "/terminate") => {
+                    let response = Response::from_string("DIE !");
+                    request.respond(response)?;
+                    server_is_running = false;
+                    break;
+                }
+                (Method::Get, "/") => {
+                    let response = Response::from_file(File::open(Path::new(&path))?);
                     request.respond(response)?;
                 }
-                Err(_) => {
-                    let response = tiny_http::Response::from_string("Error 404: that don't exist");
+                _ => {
+                    let response = Response::from_string("Error 404: Page not found");
                     request.respond(response)?;
                 }
             }
         }
     }
+    server.unblock();
+    std::mem::drop(server);
     Ok(())
 }
 
@@ -391,8 +394,7 @@ impl Oscillator {
     }
 
     fn calculate_sine_output_from_freq(&self, freq: f32) -> f32 {
-        let two_pi = 2.0 * std::f32::consts::PI;
-        (self.current_sample_index * freq * two_pi / self.sample_rate).sin()
+        (self.current_sample_index * freq * TWO_PI / self.sample_rate).sin()
     }
 
     fn is_multiple_of_freq_above_nyquist(&self, multiple: f32) -> bool {
@@ -484,10 +486,9 @@ where
         config.sample_rate.0 as f32,
         8,
         AdsrEnvelope::new_defaults(),
-    ))); // 8-voice polyphony
+    )));
     let num_channels = config.channels as usize;
     let err_fn = |err| eprintln!("Error building output sound stream: {err}");
-
     let synth_clone = Arc::clone(&synth);
 
     thread::spawn(move || {
