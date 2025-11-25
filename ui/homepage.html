@@ -7,7 +7,25 @@
 
 <h1>This is a Heading</h1>
 <p>This is a paragraph.</p>
-<button class="button">Get in touch</button>
+<button class="button" id="contactButton">Get in touch</button>
+
+<script>
+    document.getElementById('contactButton').addEventListener('click', async() => {
+        try {
+            const res = await fetch('http://127.0.0.1:8000/contact', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: 'Hello from homepage!' })
+            });
+            const text = await res.text();
+            console.log('Response from server:', text);
+            alert('Response: ' + text);
+        } catch (err) {
+            console.error(err);
+            alert('Error: ' + err.message);
+        }
+    });
+</script>
 <e class="e"> e </e>
 
 </body>
