@@ -87,7 +87,7 @@ impl Synth {
                 is_active: false,
                 note: Notes::C(4),
                 age: 0,
-                adsr: AdsrEnvelope::new_defaults(),
+                adsr: adsr.clone(),
             })
         }
 
@@ -99,7 +99,6 @@ impl Synth {
     }
 
     pub fn press_it_pops(&mut self, note: Notes) {
-        // Find an inactive voice or steal the oldest
         if let Some(_) = self.voices.iter().find(|v| v.note == note) {
             return;
         }
@@ -110,6 +109,7 @@ impl Synth {
             voice.oscillator.frequency_hz = note_to_num(note);
             voice.oscillator.current_sample_index = 0.0; // Reset phase
             voice.age = 0;
+            voice.adsr.note_on();
             return;
         }
 
@@ -119,6 +119,7 @@ impl Synth {
             oldest_voice.oscillator.frequency_hz = note_to_num(note);
             oldest_voice.oscillator.current_sample_index = 0.0; // Reset phase
             oldest_voice.age = 0;
+            oldest_voice.adsr.note_off();
         }
     }
 
@@ -127,24 +128,40 @@ impl Synth {
         for voice in self.voices.iter_mut() {
             if voice.is_active && voice.note == note {
                 voice.is_active = false;
+                voice.adsr.note_off();
             }
         }
     }
 
     pub fn tick(&mut self) -> f32 {
         let mut output = 0.0;
-        let mut active_count = 0;
+        let mut sounding_count = 0;
 
         for voice in self.voices.iter_mut() {
-            if voice.is_active {
-                output += voice.oscillator.tick();
-                active_count += 1;
-                voice.age += 1;
+            // Get the envelope's current amplitude for this frame
+            let amplitude = voice.adsr.tick();
+
+            // Check if the envelope is sounding (Attack, Decay, Sustain, or Release)
+            if voice.adsr.is_sounding() {
+                // Get the raw signal from the oscillator
+                let oscillator_signal = voice.oscillator.tick();
+
+                // Apply the envelope
+                output += oscillator_signal * amplitude;
+                sounding_count += 1;
+
+                // Only increment age if the note is *actively held down*
+                if voice.is_active {
+                    voice.age += 1;
+                }
+            } else {
+                // Envelope is Off, reset age
+                voice.age = 0;
             }
         }
 
-        let out = if active_count > 0 {
-            (output / active_count as f32).clamp(-0.9, 0.9)
+        let out = if sounding_count > 0 {
+            (output / sounding_count as f32).clamp(-0.9, 0.9)
         } else {
             0.0
         };
@@ -181,8 +198,13 @@ impl Synth {
     }
 
     fn propagate_envelope_change(&mut self) {
-        for mut voice in self.voices.clone() {
-            voice.adsr = self.adsr.clone();
+        for voice in self.voices.iter_mut() {
+            // Copy settings from the synth's template to the voice's instance
+            // This preserves the voice's current state (stage, level)
+            voice.adsr.attack = self.adsr.attack;
+            voice.adsr.decay = self.adsr.decay;
+            voice.adsr.sustain = self.adsr.sustain;
+            voice.adsr.release = self.adsr.release;
         }
     }
 
@@ -215,30 +237,72 @@ pub enum Waveform {
     Triangle,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AdsrState {
+    Off,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct AdsrEnvelope {
     attack: Duration,
     decay: Duration,
     sustain: f32,
     release: Duration,
+
+    state: AdsrState,
+    current_level: f32,
+    sample_rate: f32,
+    samples_in_state: u64,
+    release_start_level: f32,
 }
 
 impl AdsrEnvelope {
-    pub fn new(attack: Duration, decay: Duration, sustain: f32, release: Duration) -> Self {
+    pub fn new(
+        attack: Duration,
+        decay: Duration,
+        sustain: f32,
+        release: Duration,
+        sample_rate: f32,
+    ) -> Self {
         Self {
             attack,
             decay,
             sustain,
             release,
+
+            state: AdsrState::Off,
+
+            current_level: 0.,
+            sample_rate,
+            samples_in_state: 0,
+            release_start_level: 0.,
         }
     }
 
-    pub fn new_defaults() -> Self {
+    pub fn is_sounding(&self) -> bool {
+        if self.state == AdsrState::Off {
+            false
+        } else {
+            true
+        }
+    }
+
+    pub fn new_defaults(sample_rate: f32) -> Self {
         Self {
-            attack: Duration::from_millis(100),
+            attack: Duration::from_millis(10),
             decay: Duration::from_millis(100),
             sustain: 1.,
             release: Duration::from_millis(300),
+
+            state: AdsrState::Off,
+            current_level: 0.,
+            sample_rate,
+            samples_in_state: 0,
+            release_start_level: 0.,
         }
     }
 
@@ -256,6 +320,69 @@ impl AdsrEnvelope {
 
     pub fn increment_release(&mut self, increment: Duration) {
         self.release += increment;
+    }
+
+    pub fn note_on(&mut self) {
+        self.state = AdsrState::Attack;
+        self.samples_in_state = 0;
+    }
+
+    pub fn note_off(&mut self) {
+        self.state = AdsrState::Release;
+        self.samples_in_state = 0;
+    }
+
+    fn num_samples_in_state(&self) -> f32 {
+        match self.state {
+            AdsrState::Off => 0.,
+            AdsrState::Attack => (self.sample_rate * self.attack.as_secs_f32()).max(1.),
+            AdsrState::Decay => (self.sample_rate * self.decay.as_secs_f32()).max(1.),
+            AdsrState::Sustain => 0.,
+            AdsrState::Release => (self.sample_rate * self.release.as_secs_f32()).max(1.),
+        }
+    }
+
+    pub fn tick(&mut self) -> f32 {
+        self.samples_in_state += 1;
+        match self.state {
+            AdsrState::Off => {
+                self.current_level = 0.;
+            }
+            AdsrState::Attack => {
+                let attack_samples = self.num_samples_in_state();
+                self.current_level = self.samples_in_state as f32 / attack_samples;
+
+                if self.current_level >= 1. {
+                    self.current_level = 1.;
+                    self.samples_in_state = 0;
+                    self.state = AdsrState::Decay;
+                }
+            }
+            AdsrState::Decay => {
+                let decay_samples = self.num_samples_in_state();
+                let amount_to_lose = 1. - self.sustain;
+                self.current_level = 1. - (amount_to_lose / decay_samples);
+
+                if self.current_level <= self.sustain {
+                    self.current_level = self.sustain;
+                    self.samples_in_state = 0;
+                    self.state = AdsrState::Sustain;
+                }
+            }
+            AdsrState::Sustain => self.current_level = self.sustain,
+            AdsrState::Release => {
+                let release_samples = self.num_samples_in_state();
+                self.current_level = self.release_start_level
+                    - (self.samples_in_state as f32 / release_samples) * self.release_start_level;
+
+                if self.current_level <= 0. {
+                    self.current_level = 0.;
+                    self.state = AdsrState::Off;
+                    self.note_off();
+                }
+            }
+        }
+        self.current_level.clamp(0.0, 1.)
     }
 }
 
@@ -382,13 +509,8 @@ pub fn note_to_num(note: Notes) -> f32 {
 impl Oscillator {
     fn advance_sample(&mut self) {
         let s = self.current_sample_index;
-        self.current_sample_index = if s > 340282350000000000000000000000000000. {
-            s + 1.
-        } else {
-            0.
-        }
+        self.current_sample_index = if s < f32::MAX - 1.0 { s + 1.0 } else { 0.0 }
     }
-
     fn set_waveform(&mut self, waveform: Waveform) {
         self.waveform = waveform;
     }
@@ -485,7 +607,7 @@ where
     let synth = Arc::new(Mutex::new(Synth::new(
         config.sample_rate.0 as f32,
         8,
-        AdsrEnvelope::new_defaults(),
+        AdsrEnvelope::new_defaults(config.sample_rate.0 as f32),
     )));
     let num_channels = config.channels as usize;
     let err_fn = |err| eprintln!("Error building output sound stream: {err}");
