@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    FromSample, SizedSample, I24,
+    Device, FromSample, SizedSample, SupportedStreamConfig, I24,
 };
 use std::{
     f32,
@@ -14,9 +14,44 @@ use std::{
 use tiny_http::{Method, Response, Server};
 const TWO_PI: f32 = 2.0 * std::f32::consts::PI;
 
+// thread::spawn(move || {
+//     {
+//         let mut s = synth_clone.lock().unwrap();
+
+//         for v in s.voices.iter_mut() {
+//             v.oscillator.set_waveform(Waveform::Sine);
+//         }
+//         s.minor_triad(Notes::A(4));
+//     }
+
+//     thread::sleep(Duration::from_millis(2000));
+
+//     {
+//         let mut s = synth_clone.lock().unwrap();
+//         s.clear();
+//         s.minor_triad(Notes::Fsharp(4));
+//         s.press_it_pops(Notes::F(4));
+//     }
+//     thread::sleep(Duration::from_millis(2000));
+
+//     {
+//         let mut s = synth_clone.lock().unwrap();
+//         s.clear();
+//         s.minor_triad(Notes::Gsharp(4));
+//         s.press_it_pops(Notes::Fsharp(4));
+//     }
+// });
+
 fn main() -> anyhow::Result<()> {
-    let stream = stream_setup()?;
+    let (_host, device, config) = host_device_setup()?;
+    let synth = Arc::new(Mutex::new(Synth::new(
+        config.sample_rate.0 as f32,
+        8,
+        AdsrEnvelope::new_defaults(config.sample_rate.0 as f32),
+    )));
+    let stream = stream_setup(&synth, config, &device)?;
     stream.play()?;
+
     let server = Server::http("0.0.0.0:8888").expect("failed to create server");
     let mut server_is_running = true;
     while server_is_running {
@@ -562,23 +597,25 @@ impl Oscillator {
     }
 }
 
-pub fn stream_setup() -> Result<cpal::Stream, anyhow::Error>
+pub fn stream_setup(
+    synth: &Arc<Mutex<Synth>>,
+    config: SupportedStreamConfig,
+    device: &Device,
+) -> Result<cpal::Stream, anyhow::Error>
 where
 {
-    let (_host, device, config) = host_device_setup()?;
-
     match config.sample_format() {
-        cpal::SampleFormat::I8 => make_stream::<i8>(&device, &config.into()),
-        cpal::SampleFormat::I16 => make_stream::<i16>(&device, &config.into()),
-        cpal::SampleFormat::I24 => make_stream::<I24>(&device, &config.into()),
-        cpal::SampleFormat::I32 => make_stream::<i32>(&device, &config.into()),
-        cpal::SampleFormat::I64 => make_stream::<i64>(&device, &config.into()),
-        cpal::SampleFormat::U8 => make_stream::<u8>(&device, &config.into()),
-        cpal::SampleFormat::U16 => make_stream::<u16>(&device, &config.into()),
-        cpal::SampleFormat::U32 => make_stream::<u32>(&device, &config.into()),
-        cpal::SampleFormat::U64 => make_stream::<u64>(&device, &config.into()),
-        cpal::SampleFormat::F32 => make_stream::<f32>(&device, &config.into()),
-        cpal::SampleFormat::F64 => make_stream::<f64>(&device, &config.into()),
+        cpal::SampleFormat::I8 => make_stream::<i8>(synth, &device, &config.into()),
+        cpal::SampleFormat::I16 => make_stream::<i16>(synth, &device, &config.into()),
+        cpal::SampleFormat::I24 => make_stream::<I24>(synth, &device, &config.into()),
+        cpal::SampleFormat::I32 => make_stream::<i32>(synth, &device, &config.into()),
+        cpal::SampleFormat::I64 => make_stream::<i64>(synth, &device, &config.into()),
+        cpal::SampleFormat::U8 => make_stream::<u8>(synth, &device, &config.into()),
+        cpal::SampleFormat::U16 => make_stream::<u16>(synth, &device, &config.into()),
+        cpal::SampleFormat::U32 => make_stream::<u32>(synth, &device, &config.into()),
+        cpal::SampleFormat::U64 => make_stream::<u64>(synth, &device, &config.into()),
+        cpal::SampleFormat::F32 => make_stream::<f32>(synth, &device, &config.into()),
+        cpal::SampleFormat::F64 => make_stream::<f64>(synth, &device, &config.into()),
         sample_format => Err(anyhow::Error::msg(format!(
             "Unsupported sample format '{sample_format}'"
         ))),
@@ -600,46 +637,16 @@ pub fn host_device_setup(
     Ok((host, device, config))
 }
 
-pub fn make_stream<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> Result<cpal::Stream>
+pub fn make_stream<T>(
+    synth: &Arc<Mutex<Synth>>,
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<f32>,
 {
-    let synth = Arc::new(Mutex::new(Synth::new(
-        config.sample_rate.0 as f32,
-        8,
-        AdsrEnvelope::new_defaults(config.sample_rate.0 as f32),
-    )));
     let num_channels = config.channels as usize;
     let err_fn = |err| eprintln!("Error building output sound stream: {err}");
-    let synth_clone = Arc::clone(&synth);
-
-    thread::spawn(move || {
-        {
-            let mut s = synth_clone.lock().unwrap();
-
-            for v in s.voices.iter_mut() {
-                v.oscillator.set_waveform(Waveform::Sine);
-            }
-            s.minor_triad(Notes::A(4));
-        }
-
-        thread::sleep(Duration::from_millis(2000));
-
-        {
-            let mut s = synth_clone.lock().unwrap();
-            s.clear();
-            s.minor_triad(Notes::Fsharp(4));
-            s.press_it_pops(Notes::F(4));
-        }
-        thread::sleep(Duration::from_millis(2000));
-
-        {
-            let mut s = synth_clone.lock().unwrap();
-            s.clear();
-            s.minor_triad(Notes::Gsharp(4));
-            s.press_it_pops(Notes::Fsharp(4));
-        }
-    });
 
     let synth_render = Arc::clone(&synth);
     let stream = device.build_output_stream(
