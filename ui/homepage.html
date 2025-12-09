@@ -1,7 +1,7 @@
  <!DOCTYPE html>
 <html>
 <head>
-<link rel='stylesheet' href='stylesheet.css' type='text/css' media='screen'> 
+<link rel='stylesheet' href='stylesheet.css' type='text/css'> 
 </head>
 <body>
 
@@ -18,13 +18,34 @@
                 body: JSON.stringify({ message: 'Kill me pleaseeee !' })
             });
             const text = await res.text();
-            console.log('Response from server:', text);
+            console.log('Response from server:' + text);
 			alert("server is dead");
         } catch (err) {
             console.error(err);
             alert('Error: ' + err.message);
         }
     });
+</script>
+
+<button class="button" id="A1">A</button>
+
+<script>
+		 console.log("input taken");
+		 document.getElementById('A1').addEventListener('click', async() => {
+			 try {
+				 const res = await fetch('/A1', {
+					 method: 'POST',
+					 headers: { 'Content-Type': 'application/json' },
+					 body: JSON.stringify({ message: 'Press A1 Please?' }),
+				 });
+				 const text = await res.text();
+				 console.log('Response from server:' + text);
+				 alert("Note should be playing");
+			 } catch (err) {
+				 console.error(err);
+				 alert('Error: ' + err.message);
+			 }
+		 })
 </script>
 
 </body>

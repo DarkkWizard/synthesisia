@@ -8,46 +8,20 @@ use std::{
     fs::File,
     path::Path,
     sync::{Arc, Mutex},
-    thread,
     time::Duration,
 };
 use tiny_http::{Method, Response, Server};
 const TWO_PI: f32 = 2.0 * std::f32::consts::PI;
-
-// thread::spawn(move || {
-//     {
-//         let mut s = synth_clone.lock().unwrap();
-
-//         for v in s.voices.iter_mut() {
-//             v.oscillator.set_waveform(Waveform::Sine);
-//         }
-//         s.minor_triad(Notes::A(4));
-//     }
-
-//     thread::sleep(Duration::from_millis(2000));
-
-//     {
-//         let mut s = synth_clone.lock().unwrap();
-//         s.clear();
-//         s.minor_triad(Notes::Fsharp(4));
-//         s.press_it_pops(Notes::F(4));
-//     }
-//     thread::sleep(Duration::from_millis(2000));
-
-//     {
-//         let mut s = synth_clone.lock().unwrap();
-//         s.clear();
-//         s.minor_triad(Notes::Gsharp(4));
-//         s.press_it_pops(Notes::Fsharp(4));
-//     }
-// });
+const HTML_PATH: &str = "ui/homepage.html";
+const CSS_PATH: &str = "ui/stylesheet.css";
 
 fn main() -> anyhow::Result<()> {
     let (_host, device, config) = host_device_setup()?;
+    let sample_rate = config.sample_rate();
     let synth = Arc::new(Mutex::new(Synth::new(
-        config.sample_rate.0 as f32,
+        sample_rate.0 as f32,
         8,
-        AdsrEnvelope::new_defaults(config.sample_rate.0 as f32),
+        AdsrEnvelope::new_defaults(sample_rate.0 as f32),
     )));
     let stream = stream_setup(&synth, config, &device)?;
     stream.play()?;
@@ -56,23 +30,32 @@ fn main() -> anyhow::Result<()> {
     let mut server_is_running = true;
     while server_is_running {
         for request in server.incoming_requests() {
-            let url = request.url();
-
-            let path = if url == "/" {
-                "ui/homepage.html".to_string()
-            } else {
-                format!("ui{}", url)
-            };
-
             match (request.method(), request.url()) {
+                (Method::Get, "/") => {
+                    let response = Response::from_file(File::open(Path::new(HTML_PATH))?);
+                    request.respond(response)?;
+                }
+                (Method::Get, "/stylesheet.css") => {
+                    let response = Response::from_file(File::open(Path::new(CSS_PATH))?);
+                    request.respond(response)?;
+                }
                 (Method::Post, "/terminate") => {
                     let response = Response::from_string("DIE !");
                     request.respond(response)?;
                     server_is_running = false;
                     break;
                 }
-                (Method::Get, "/") => {
-                    let response = Response::from_file(File::open(Path::new(&path))?);
+                (Method::Post, "/A1") => {
+                    let writing_synth = synth.clone();
+
+                    writing_synth
+                        .lock()
+                        .expect("failed to acquire synth lock")
+                        .major_triad(Notes::A(9));
+
+                    std::mem::drop(writing_synth);
+
+                    let response = Response::from_string("Key Pressed");
                     request.respond(response)?;
                 }
                 _ => {
