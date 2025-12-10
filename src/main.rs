@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
                     writing_synth
                         .lock()
                         .expect("failed to acquire synth lock")
-                        .major_triad(Notes::A(9));
+                        .major_triad(Notes::A(3));
 
                     std::mem::drop(writing_synth);
 
